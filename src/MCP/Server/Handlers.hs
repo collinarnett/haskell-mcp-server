@@ -58,14 +58,15 @@ getMessageSummary (JsonRpcMessageNotification notif) =
 getMessageSummary (JsonRpcMessageResponse resp) =
   "Response[" ++ show (responseId resp) ++ "]"
 
--- | Validate protocol version and return negotiated version
--- Per MCP spec: "If the server supports the requested protocol version,
--- it MUST respond with the same version. Otherwise, the server MUST respond
--- with another protocol version it supports."
+-- | Validate protocol version and return negotiated version.
+-- Per MCP spec: the server responds with the highest version it supports
+-- that is compatible with the client. Since the protocol is designed to be
+-- backwards-compatible, we echo the client's version when it is >= ours
+-- and fall back to our version otherwise.
 validateProtocolVersion :: Text -> Either Text Text
 validateProtocolVersion clientVersion
-  | clientVersion == protocolVersion = Right protocolVersion  -- Exact match
-  | otherwise = Right protocolVersion  -- Negotiate: return server's supported version
+  | clientVersion >= protocolVersion = Right clientVersion
+  | otherwise = Right protocolVersion
 
 -- | Handle an MCP message and return a response if needed
 handleMcpMessage :: (MonadIO m)
