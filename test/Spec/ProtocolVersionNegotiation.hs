@@ -72,9 +72,8 @@ spec = describe "Protocol Version Negotiation" $ do
           Just (Object result) -> do
             case KM.lookup "protocolVersion" result of
               Just (String version) -> do
-                -- The server should have responded with its supported version
-                -- We expect "2025-06-18" based on the library
-                version `shouldBe` "2025-06-18"
+                -- The server should echo the client's version when it is newer
+                version `shouldBe` "2025-11-25"
               Just other -> expectationFailure $ "protocolVersion is not a string: " ++ show other
               Nothing -> expectationFailure "Response missing protocolVersion"
           Just other -> expectationFailure $ "Result is not an object: " ++ show other
