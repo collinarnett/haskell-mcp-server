@@ -9,6 +9,12 @@ import           Data.Text (Text)
 data MyPrompt
     = Recipe { idea :: Text }
     | Shopping { description :: Text }
+    -- Conformance fixtures (test_simple_prompt, test_prompt_with_arguments, …
+    -- snake-cased from constructor names by 'derivePromptHandler').
+    | TestSimplePrompt
+    | TestPromptWithArguments { arg1 :: Text, arg2 :: Text }
+    | TestPromptWithEmbeddedResource { resourceUri :: Text }
+    | TestPromptWithImage
     deriving (Show, Eq)
 
 data MyResource
@@ -22,4 +28,11 @@ data MyTool
     | AddToCart { sku :: Text }
     | Checkout
     | ComplexTool { field1 :: Text, field2 :: Text, field3 :: Maybe Text, field4 :: Text, field5 :: Maybe Text }
+    -- Conformance fixtures (test_simple_text, test_image_content, …)
+    | TestSimpleText
+    | TestImageContent
+    | TestAudioContent
+    | TestEmbeddedResource
+    | TestMultipleContentTypes
+    | TestErrorHandling
     deriving (Show, Eq)

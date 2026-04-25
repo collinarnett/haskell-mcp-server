@@ -116,34 +116,34 @@ spec = describe "Unicode Handling" $ do
 
   describe "Manual Handler Tests with Unicode" $ do
     it "tests Unicode content through manual prompt handler" $ do
-      let promptHandler :: PromptName -> [(ArgumentName, ArgumentValue)] -> IO (Either Error Content)
+      let promptHandler :: PromptName -> [(ArgumentName, ArgumentValue)] -> IO (Either Error [PromptMessage])
           promptHandler "unicode_test" args = do
             case lookup "formula" args of
-              Just formula -> return $ Right $ ContentText $ "Formula result: " <> formula <> " → √solution"
+              Just formula -> return $ Right [userMessage (ContentText ("Formula result: " <> formula <> " → √solution"))]
               Nothing -> return $ Left $ MissingRequiredParams "formula"
           promptHandler name _ = return $ Left $ InvalidPromptName name
 
       result <- promptHandler "unicode_test" [("formula", "x² + y² = z²")]
       case result of
-        Right (ContentText txt) -> do
+        Right [PromptMessage RoleUser (ContentText txt)] -> do
           txt `shouldSatisfy` T.isInfixOf "√"
           txt `shouldSatisfy` T.isInfixOf "²"
-        _ -> expectationFailure "Expected successful ContentText with Unicode"
+        _ -> expectationFailure "Expected successful prompt message with Unicode"
 
     it "tests Unicode content through manual tool handler" $ do
-      let toolHandler :: ToolName -> [(ArgumentName, ArgumentValue)] -> IO (Either Error Content)
+      let toolHandler :: ToolName -> [(ArgumentName, ArgumentValue)] -> IO (Either Error ToolResult)
           toolHandler "calculate" args = do
             case lookup "expression" args of
-              Just expr -> return $ Right $ ContentText $ "Calculation: " <> expr <> " = √result"
+              Just expr -> return $ Right $ toolText $ "Calculation: " <> expr <> " = √result"
               Nothing -> return $ Left $ MissingRequiredParams "expression"
           toolHandler name _ = return $ Left $ UnknownTool name
 
       result <- toolHandler "calculate" [("expression", "∫₀^∞ e^(-x²) dx")]
       case result of
-        Right (ContentText txt) -> do
+        Right (ToolResult [ContentText txt] False) -> do
           txt `shouldSatisfy` T.isInfixOf "√"
           txt `shouldSatisfy` T.isInfixOf "∫"
-        _ -> expectationFailure "Expected successful ContentText with Unicode"
+        _ -> expectationFailure "Expected successful tool text result with Unicode"
 
     it "tests Unicode content through manual resource handler" $ do
       let resourceHandler :: URI -> IO (Either Error ResourceContent)
@@ -178,7 +178,7 @@ spec = describe "Unicode Handling" $ do
 
       let promptGetHandler name args = case name of
             "math_formula" -> case lookup "formula" args of
-              Just formula -> return $ Right $ ContentText $ "Formula: " <> formula <> " → √(solution)"
+              Just formula -> return $ Right [userMessage (ContentText ("Formula: " <> formula <> " → √(solution)"))]
               Nothing -> return $ Left $ MissingRequiredParams "formula"
             _ -> return $ Left $ InvalidPromptName name
 
@@ -211,14 +211,16 @@ spec = describe "Unicode Handling" $ do
 
       let toolCallHandler name args = case name of
             "calculate" -> case lookup "expression" args of
-              Just expr -> return $ Right $ ContentText $ "Result: " <> expr <> " → √answer"
+              Just expr -> return $ Right $ toolText $ "Result: " <> expr <> " → √answer"
               Nothing -> return $ Left $ MissingRequiredParams "expression"
             _ -> return $ Left $ UnknownTool name
 
       let handlers = McpServerHandlers
-            { prompts = Just (promptListHandler, promptGetHandler)
-            , resources = Just (resourceListHandler, resourceReadHandler)
-            , tools = Just (toolListHandler, toolCallHandler)
+            { prompts           = Just (promptListHandler, promptGetHandler)
+            , resources         = Just (resourceListHandler, resourceReadHandler)
+            , resourceTemplates = Nothing
+            , tools             = Just (toolListHandler, toolCallHandler)
+            , completions       = Nothing
             }
 
       -- Test that all handlers work with Unicode
@@ -234,7 +236,7 @@ spec = describe "Unicode Handling" $ do
       -- Test actual Unicode handling
       promptResult <- snd (case prompts handlers of Just h -> h; Nothing -> error "No prompts") "math_formula" [("formula", "√(x²+y²)")]
       case promptResult of
-        Right (ContentText txt) -> txt `shouldSatisfy` T.isInfixOf "√"
+        Right [PromptMessage RoleUser (ContentText txt)] -> txt `shouldSatisfy` T.isInfixOf "√"
         _ -> expectationFailure "Expected successful prompt result"
 
       uri <- case parseURI "resource://unicode_symbols" of
@@ -247,7 +249,7 @@ spec = describe "Unicode Handling" $ do
 
       toolResult <- snd (case tools handlers of Just h -> h; Nothing -> error "No tools") "calculate" [("expression", "∫₀^∞ e^(-x²) dx = √π/2")]
       case toolResult of
-        Right (ContentText txt) -> do
+        Right (ToolResult [ContentText txt] False) -> do
           txt `shouldSatisfy` T.isInfixOf "√"
           txt `shouldSatisfy` T.isInfixOf "∫"
         _ -> expectationFailure "Expected successful tool result"

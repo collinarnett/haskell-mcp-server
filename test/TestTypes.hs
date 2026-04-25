@@ -4,7 +4,8 @@ module TestTypes where
 
 import           Data.Text  (Text)
 import qualified Data.Text  as T
-import           MCP.Server (Content(..), ResourceContent(..))
+import           MCP.Server (Content(..), PromptMessage, ResourceContent(..),
+                             ToolResult, toolText, userMessage)
 import           Network.URI (URI)
 
 -- Test data types for end-to-end testing
@@ -47,13 +48,13 @@ data RecursiveTool = ProcessData MiddleParams
     deriving (Show, Eq)
 
 -- Handler functions
-handleTestPrompt :: TestPrompt -> IO Content
+handleTestPrompt :: TestPrompt -> IO [PromptMessage]
 handleTestPrompt (SimplePrompt msg) =
-    pure $ ContentText $ "Simple prompt: " <> msg
+    pure [userMessage (ContentText ("Simple prompt: " <> msg))]
 handleTestPrompt (ComplexPrompt title prio urgent) =
-    pure $ ContentText $ "Complex prompt: " <> title <> " (priority=" <> T.pack (show prio) <> ", urgent=" <> T.pack (show urgent) <> ")"
+    pure [userMessage (ContentText ("Complex prompt: " <> title <> " (priority=" <> T.pack (show prio) <> ", urgent=" <> T.pack (show urgent) <> ")"))]
 handleTestPrompt (OptionalPrompt req opt) =
-    pure $ ContentText $ "Optional prompt: " <> req <> maybe "" ((" optional=" <>) . T.pack . show) opt
+    pure [userMessage (ContentText ("Optional prompt: " <> req <> maybe "" ((" optional=" <>) . T.pack . show) opt))]
 
 handleTestResource :: URI -> TestResource -> IO ResourceContent
 handleTestResource uri ConfigFile =
@@ -63,34 +64,34 @@ handleTestResource uri DatabaseConnection =
 handleTestResource uri UserProfile =
     pure $ ResourceText uri "text/plain" "User profile for ID 123"
 
-handleTestTool :: TestTool -> IO Content
+handleTestTool :: TestTool -> IO ToolResult
 handleTestTool (Echo text) =
-    pure $ ContentText $ "Echo: " <> text
+    pure $ toolText $ "Echo: " <> text
 handleTestTool (Calculate op x y) =
     let result = case op of
             "add" -> x + y
             "multiply" -> x * y
             "subtract" -> x - y
             _ -> 0
-    in pure $ ContentText $ T.pack (show result)
+    in pure $ toolText $ T.pack (show result)
 handleTestTool (Toggle flag) =
-    pure $ ContentText $ "Flag is now: " <> T.pack (show (not flag))
+    pure $ toolText $ "Flag is now: " <> T.pack (show (not flag))
 handleTestTool (Search query limit caseSens) =
-    pure $ ContentText $ "Search results for '" <> query <> "'" <>
+    pure $ toolText $ "Search results for '" <> query <> "'" <>
         maybe "" ((" (limit=" <>) . (<> ")") . T.pack . show) limit <>
         maybe "" ((" (case-sensitive=" <>) . (<> ")") . T.pack . show) caseSens
 
 -- Handler for separate params tool
-handleSeparateParamsTool :: SeparateParamsTool -> IO Content
+handleSeparateParamsTool :: SeparateParamsTool -> IO ToolResult
 handleSeparateParamsTool (GetValue (GetValueParams key)) =
-    pure $ ContentText $ "Getting value for key: " <> key
+    pure $ toolText $ "Getting value for key: " <> key
 handleSeparateParamsTool (SetValue (SetValueParams key value)) =
-    pure $ ContentText $ "Setting " <> key <> " = " <> value
+    pure $ toolText $ "Setting " <> key <> " = " <> value
 
 -- Handler for recursive tool
-handleRecursiveTool :: RecursiveTool -> IO Content
+handleRecursiveTool :: RecursiveTool -> IO ToolResult
 handleRecursiveTool (ProcessData (MiddleParams (InnerParams name age))) =
-    pure $ ContentText $ "Processing data for " <> name <> " (age " <> T.pack (show age) <> ")"
+    pure $ toolText $ "Processing data for " <> name <> " (age " <> T.pack (show age) <> ")"
 
 -- Type covering all parseable field types for exhaustive parsing tests
 data AllTypesTool
@@ -112,9 +113,9 @@ data AllTypesTool
         }
     deriving (Show, Eq)
 
-handleAllTypesTool :: AllTypesTool -> IO Content
+handleAllTypesTool :: AllTypesTool -> IO ToolResult
 handleAllTypesTool (RequiredFields t i ig d f b) =
-    pure $ ContentText $ T.intercalate ", "
+    pure $ toolText $ T.intercalate ", "
         [ "text=" <> t
         , "int=" <> T.pack (show i)
         , "integer=" <> T.pack (show ig)
@@ -123,7 +124,7 @@ handleAllTypesTool (RequiredFields t i ig d f b) =
         , "bool=" <> T.pack (show b)
         ]
 handleAllTypesTool (OptionalFields t i ig d f b) =
-    pure $ ContentText $ T.intercalate ", "
+    pure $ toolText $ T.intercalate ", "
         [ "text=" <> maybe "Nothing" id t
         , "int=" <> maybe "Nothing" (T.pack . show) i
         , "integer=" <> maybe "Nothing" (T.pack . show) ig

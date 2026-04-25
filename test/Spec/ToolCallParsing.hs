@@ -13,17 +13,17 @@ import TestTypes
 allTypesHandlers :: (ToolListHandler IO, ToolCallHandler IO)
 allTypesHandlers = $(deriveToolHandler ''AllTypesTool 'handleAllTypesTool)
 
-callTool :: Text -> [(Text, Text)] -> IO (Either Error Content)
+callTool :: Text -> [(Text, Text)] -> IO (Either Error ToolResult)
 callTool = snd allTypesHandlers
 
-shouldBeRight :: IO (Either Error Content) -> Text -> IO ()
+shouldBeRight :: IO (Either Error ToolResult) -> Text -> IO ()
 shouldBeRight action expected = do
   result <- action
   case result of
-    Right (ContentText content) -> content `shouldBe` expected
-    other -> expectationFailure $ "Expected ContentText '" ++ T.unpack expected ++ "' but got: " ++ show other
+    Right (ToolResult [ContentText content] False) -> content `shouldBe` expected
+    other -> expectationFailure $ "Expected single non-error ContentText '" ++ T.unpack expected ++ "' but got: " ++ show other
 
-shouldBeInvalidParams :: IO (Either Error Content) -> Text -> IO ()
+shouldBeInvalidParams :: IO (Either Error ToolResult) -> Text -> IO ()
 shouldBeInvalidParams action expectedSubstring = do
   result <- action
   case result of
@@ -31,7 +31,7 @@ shouldBeInvalidParams action expectedSubstring = do
       T.isInfixOf expectedSubstring msg `shouldBe` True
     other -> expectationFailure $ "Expected InvalidParams containing '" ++ T.unpack expectedSubstring ++ "' but got: " ++ show other
 
-shouldBeMissingParams :: IO (Either Error Content) -> Text -> IO ()
+shouldBeMissingParams :: IO (Either Error ToolResult) -> Text -> IO ()
 shouldBeMissingParams action expectedSubstring = do
   result <- action
   case result of

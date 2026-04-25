@@ -8,7 +8,19 @@ import Test.Hspec
 
 import MCP.Server.Handlers (handleInitialize)
 import MCP.Server.JsonRpc (JsonRpcRequest(..), RequestId(..), JsonRpcResponse(..), JsonRpcError(..))
-import MCP.Server.Types (McpServerInfo(..))
+import MCP.Server.Types (McpServerInfo(..), McpServerHandlers(..))
+
+-- | Empty handler set is sufficient for protocol-version-negotiation tests:
+-- those tests only inspect @protocolVersion@ in the response and do not
+-- exercise prompts/resources/tools dispatch.
+emptyHandlers :: McpServerHandlers IO
+emptyHandlers = McpServerHandlers
+  { prompts           = Nothing
+  , resources         = Nothing
+  , resourceTemplates = Nothing
+  , tools             = Nothing
+  , completions       = Nothing
+  }
 
 -- | Test that server performs proper version negotiation according to MCP spec
 --
@@ -55,7 +67,7 @@ spec = describe "Protocol Version Negotiation" $ do
           }
 
     -- Call handleInitialize directly (it runs in IO monad)
-    response <- handleInitialize testServerInfo request
+    response <- handleInitialize testServerInfo emptyHandlers request
 
     -- Check if it's an error response
     case responseError response of
@@ -96,7 +108,7 @@ spec = describe "Protocol Version Negotiation" $ do
           , requestParams = Just params
           }
 
-    response <- handleInitialize testServerInfo request
+    response <- handleInitialize testServerInfo emptyHandlers request
 
     -- Check it's not an error
     case responseError response of

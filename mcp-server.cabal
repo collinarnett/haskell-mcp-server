@@ -168,6 +168,7 @@ test-suite haskell-mcp-server-test
   other-modules:
     Spec.AdvancedDerivation
     Spec.BasicDerivation
+    Spec.ContentEncoding
     Spec.JSONConversion
     Spec.ProtocolVersionNegotiation
     Spec.SchemaValidation

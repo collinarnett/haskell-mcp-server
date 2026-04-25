@@ -44,8 +44,8 @@ assertToolCallResult :: (ToolCallHandler IO) -> Text -> [(Text, Text)] -> Text -
 assertToolCallResult handler toolName args expectedContent = do
   result <- handler toolName args
   case result of
-    Right (ContentText content) -> content `shouldBe` expectedContent
-    other -> expectationFailure $ "Expected ContentText but got: " ++ show other
+    Right (ToolResult [ContentText content] False) -> content `shouldBe` expectedContent
+    other -> expectationFailure $ "Expected single non-error ContentText but got: " ++ show other
 
 assertToolHasDescription :: Text -> Text -> ToolDefinition -> IO ()
 assertToolHasDescription toolName expectedDesc toolDef = do

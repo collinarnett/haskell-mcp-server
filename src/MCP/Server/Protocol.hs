@@ -14,20 +14,31 @@ module MCP.Server.Protocol
   , PromptsListResponse(..)
   , PromptsGetRequest(..)
   , PromptsGetResponse(..)
-  , PromptMessage(..)
-  , MessageRole(..)
 
     -- * Resources Protocol
   , ResourcesListRequest(..)
   , ResourcesListResponse(..)
   , ResourcesReadRequest(..)
   , ResourcesReadResponse(..)
+  , ResourcesTemplatesListRequest(..)
+  , ResourcesTemplatesListResponse(..)
 
     -- * Tools Protocol
   , ToolsListRequest(..)
   , ToolsListResponse(..)
   , ToolsCallRequest(..)
   , ToolsCallResponse(..)
+
+    -- * Logging
+  , SetLevelRequest(..)
+
+    -- * Completion
+  , CompleteRequest(..)
+  , CompleteResponse(..)
+
+    -- * Subscriptions
+  , SubscribeRequest(..)
+  , UnsubscribeRequest(..)
 
     -- * Common Types
   , ListChangedNotification(..)
@@ -98,25 +109,9 @@ data PongResponse = PongResponse
 instance ToJSON PongResponse where
   toJSON PongResponse = object []
 
--- | Message role for prompts
-data MessageRole = RoleUser | RoleAssistant
-  deriving (Show, Eq, Generic)
-
-instance ToJSON MessageRole where
-  toJSON RoleUser      = "user"
-  toJSON RoleAssistant = "assistant"
-
--- | Prompt message
-data PromptMessage = PromptMessage
-  { promptMessageRole    :: MessageRole
-  , promptMessageContent :: Content
-  } deriving (Show, Eq, Generic)
-
-instance ToJSON PromptMessage where
-  toJSON msg = object
-    [ "role" .= promptMessageRole msg
-    , "content" .= promptMessageContent msg
-    ]
+-- 'PromptMessage' / 'MessageRole' live in "MCP.Server.Types" so the public
+-- @MCP.Server@ module can re-export them via its existing
+-- @module MCP.Server.Types@ re-export.
 
 -- | Prompts list request
 data PromptsListRequest = PromptsListRequest
@@ -198,6 +193,24 @@ instance ToJSON ResourcesReadResponse where
     [ "contents" .= resourcesReadContents resp
     ]
 
+-- | @resources/templates/list@ has the same nullary request shape as the
+-- other paginated list requests. We do not implement cursor-based pagination
+-- yet — the server returns every template in a single response.
+data ResourcesTemplatesListRequest = ResourcesTemplatesListRequest
+  deriving (Show, Eq, Generic)
+
+instance FromJSON ResourcesTemplatesListRequest where
+  parseJSON _ = return ResourcesTemplatesListRequest
+
+data ResourcesTemplatesListResponse = ResourcesTemplatesListResponse
+  { resourcesTemplatesListTemplates :: [ResourceTemplateDefinition]
+  } deriving (Show, Eq, Generic)
+
+instance ToJSON ResourcesTemplatesListResponse where
+  toJSON resp = object
+    [ "resourceTemplates" .= resourcesTemplatesListTemplates resp
+    ]
+
 -- | Tools list request
 data ToolsListRequest = ToolsListRequest
   deriving (Show, Eq, Generic)
@@ -238,6 +251,50 @@ instance ToJSON ToolsCallResponse where
     [ "content" .= toolsCallContent resp
     ] ++ maybe [] (\e -> ["isError" .= e]) (toolsCallIsError resp)
       ++ maybe [] (\m -> ["_meta" .= m]) (toolsCallMeta resp)
+
+-- | @logging/setLevel@ — stores a per-session log threshold.
+data SetLevelRequest = SetLevelRequest
+  { setLevelLevel :: LogLevel
+  } deriving (Show, Eq, Generic)
+
+instance FromJSON SetLevelRequest where
+  parseJSON = withObject "SetLevelRequest" $ \o -> SetLevelRequest <$> o .: "level"
+
+-- | @completion/complete@ request.
+data CompleteRequest = CompleteRequest
+  { completeRef      :: CompletionReference
+  , completeArgument :: CompletionArgument
+  , completeContext  :: Maybe Value
+  } deriving (Show, Eq, Generic)
+
+instance FromJSON CompleteRequest where
+  parseJSON = withObject "CompleteRequest" $ \o -> CompleteRequest
+    <$> o .:  "ref"
+    <*> o .:  "argument"
+    <*> o .:? "context"
+
+data CompleteResponse = CompleteResponse
+  { completeCompletion :: CompletionResult
+  } deriving (Show, Eq, Generic)
+
+instance ToJSON CompleteResponse where
+  toJSON r = object [ "completion" .= completeCompletion r ]
+
+-- | @resources/subscribe@ — server is asked to monitor a URI for updates.
+data SubscribeRequest = SubscribeRequest
+  { subscribeUri :: Text
+  } deriving (Show, Eq, Generic)
+
+instance FromJSON SubscribeRequest where
+  parseJSON = withObject "SubscribeRequest" $ \o -> SubscribeRequest <$> o .: "uri"
+
+-- | @resources/unsubscribe@ — paired with 'SubscribeRequest'.
+data UnsubscribeRequest = UnsubscribeRequest
+  { unsubscribeUri :: Text
+  } deriving (Show, Eq, Generic)
+
+instance FromJSON UnsubscribeRequest where
+  parseJSON = withObject "UnsubscribeRequest" $ \o -> UnsubscribeRequest <$> o .: "uri"
 
 -- | List changed notification
 data ListChangedNotification = ListChangedNotification

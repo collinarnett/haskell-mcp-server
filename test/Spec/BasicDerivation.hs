@@ -38,9 +38,22 @@ shouldContainText action expectedSubstring = do
       T.isInfixOf expectedSubstring content `shouldBe` True
     other -> expectationFailure $ "Expected ContentText containing '" ++ T.unpack expectedSubstring ++ "' but got: " ++ show other
 
+-- | Assert a prompt handler returns exactly one user-role message whose
+-- content is a 'ContentText' equal to the expected string. The post-2025-06-18
+-- handler signature returns @[PromptMessage]@ to allow multi-message replies;
+-- single-message expectations stay readable through this helper.
 testPromptCall :: PromptGetHandler IO -> Text -> [(Text, Text)] -> Text -> IO ()
-testPromptCall handler name args expected =
-  shouldReturnContentText (handler name args) expected
+testPromptCall handler name args expected = do
+  result <- handler name args
+  case result of
+    Right [PromptMessage RoleUser (ContentText content)] ->
+      content `shouldBe` expected
+    Right msgs ->
+      expectationFailure $
+        "Expected single user-text message '" ++ T.unpack expected ++
+        "' but got: " ++ show msgs
+    Left err ->
+      expectationFailure $ "Expected success but got error: " ++ show err
 
 testResourceCall :: ResourceReadHandler IO -> String -> Text -> IO ()
 testResourceCall handler uriString expected = do
@@ -54,8 +67,14 @@ testResourceCall handler uriString expected = do
     Nothing -> expectationFailure $ "Failed to parse URI: " ++ uriString
 
 testToolCall :: ToolCallHandler IO -> Text -> [(Text, Text)] -> Text -> IO ()
-testToolCall handler name args expected =
-  shouldReturnContentText (handler name args) expected
+testToolCall handler name args expected = do
+  result <- handler name args
+  case result of
+    Right (ToolResult [ContentText txt] False) -> txt `shouldBe` expected
+    Right tr -> expectationFailure $
+      "Expected single non-error ContentText '" ++ T.unpack expected ++
+      "' but got: " ++ show tr
+    Left err -> expectationFailure $ "Expected success but got error: " ++ show err
 
 spec :: Spec
 spec = describe "Basic Template Haskell Derivation" $ do
