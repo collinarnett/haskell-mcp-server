@@ -1,17 +1,25 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell   #-}
+{-# LANGUAGE DeriveGeneric         #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedRecordDot   #-}
+{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE TemplateHaskell       #-}
 
 module Main where
 
 import           Control.Concurrent (threadDelay)
-import           Data.Aeson         (FromJSON (..), Value, fromJSON, object,
-                                     toJSON, withObject, (.:), (.:?), (.=))
+import           Data.Aeson         (FromJSON, ToJSON (..), Value, fromJSON)
 import qualified Data.Aeson         as A
+import           Data.List          (dropWhileEnd)
+import           Data.Map.Strict    (Map)
+import qualified Data.Map.Strict    as Map
 import qualified Data.Text          as T
+import           GHC.Generics       (Generic)
 import           MCP.Server
 import           MCP.Server.Derive
 import           System.Environment (getArgs)
-import           System.IO          (hSetEncoding, stderr, stdout, utf8)
+import           System.Exit        (exitFailure)
+import           System.IO          (hPutStrLn, hSetEncoding, stderr, stdout,
+                                     utf8)
 import           Text.Read          (readMaybe)
 import           Types
 
@@ -21,6 +29,24 @@ import           Types
 tinyPngBase64 :: T.Text
 tinyPngBase64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+
+-- | Parse a URI literal known to be valid at write time. The arguments are
+-- compile-time constants embedded in the source; a failure here means the
+-- literal itself is malformed (i.e. a typo in this file), not invalid user
+-- input. This is the only place in the example where we centralize the
+-- "cannot happen at runtime" invariant — every dynamic URI is parsed via
+-- 'parseURI' with a real 'Maybe' branch.
+mustParseURI :: String -> URI
+mustParseURI s = case parseURI s of
+  Just u  -> u
+  Nothing -> error ("invariant: hardcoded URI literal does not parse: " <> s)
+
+-- Pre-parsed conformance URIs. Lifted to top-level constants so each handler
+-- doesn't re-run 'parseURI' on every call.
+embeddedResourceUri, mixedContentResourceUri, fallbackEmbeddedUri :: URI
+embeddedResourceUri     = mustParseURI "test://embedded-resource"
+mixedContentResourceUri = mustParseURI "test://mixed-content-resource"
+fallbackEmbeddedUri     = mustParseURI "test://invalid"
 
 -- High-level handler functions
 
@@ -33,16 +59,12 @@ handlePrompt TestSimplePrompt =
     pure [userMessage (ContentText "This is a simple prompt for testing.")]
 handlePrompt (TestPromptWithArguments a1 a2) =
     pure [userMessage (ContentText ("Prompt with arguments: arg1='" <> a1 <> "', arg2='" <> a2 <> "'"))]
-handlePrompt (TestPromptWithEmbeddedResource uriText) = do
+handlePrompt (TestPromptWithEmbeddedResource uriText) =
     -- Conformance passes an arbitrary URI string; if it does not round-trip
-    -- through Network.URI we fall back to a sentinel so we still produce a
-    -- spec-shaped message rather than crashing the server.
-    let uri = case parseURI (T.unpack uriText) of
-          Just u  -> u
-          Nothing -> case parseURI "test://invalid" of
-            Just u  -> u
-            Nothing -> error "tinyUri: parseURI failed for sentinel"
-    pure
+    -- through Network.URI we substitute a known-valid sentinel so we still
+    -- produce a spec-shaped message rather than crashing the server.
+    let uri = maybe fallbackEmbeddedUri id (parseURI (T.unpack uriText))
+    in pure
       [ userMessage (ContentEmbeddedResource (ResourceText uri "text/plain" "Embedded resource content for testing."))
       , userMessage (ContentText "Please process the embedded resource above.")
       ]
@@ -159,21 +181,15 @@ handleTool TestImageContent _ =
     pure $ toolContent [ContentImage (ContentImageData tinyPngBase64 "image/png")]
 handleTool TestAudioContent _ =
     pure $ toolContent [ContentAudio (ContentAudioData tinyWavBase64 "audio/wav")]
-handleTool TestEmbeddedResource _ = do
-    let uri = case parseURI "test://embedded-resource" of
-          Just u  -> u
-          Nothing -> error "invariant: test://embedded-resource is a valid URI"
+handleTool TestEmbeddedResource _ =
     pure $ toolContent
-      [ ContentEmbeddedResource $ ResourceText uri "text/plain" "This is an embedded resource content."
+      [ ContentEmbeddedResource $ ResourceText embeddedResourceUri "text/plain" "This is an embedded resource content."
       ]
-handleTool TestMultipleContentTypes _ = do
-    let uri = case parseURI "test://mixed-content-resource" of
-          Just u  -> u
-          Nothing -> error "invariant: test://mixed-content-resource is a valid URI"
+handleTool TestMultipleContentTypes _ =
     pure $ toolContent
       [ ContentText "Multiple content types test:"
       , ContentImage (ContentImageData tinyPngBase64 "image/png")
-      , ContentEmbeddedResource $ ResourceText uri "application/json" "{\"test\":\"data\",\"value\":123}"
+      , ContentEmbeddedResource $ ResourceText mixedContentResourceUri "application/json" "{\"test\":\"data\",\"value\":123}"
       ]
 handleTool TestErrorHandling _ =
     pure $ toolError "This tool intentionally returns an error for testing"
@@ -194,73 +210,127 @@ handleTool TestToolWithLogging sess = do
     sendLog sess LogInfo Nothing (toJSON ("Tool execution completed":: T.Text))
     pure $ toolText "Logging test complete."
 handleTool (TestSampling promptText) sess = do
-    -- Issue a sampling/createMessage request to the client and surface the
-    -- text it returns. The conformance suite plays the role of the LLM and
-    -- always responds with role=assistant, content.text="...".
-    let params = object
-          [ "messages" .= [ object
-              [ "role"    .= ("user" :: T.Text)
-              , "content" .= object
-                  [ "type" .= ("text" :: T.Text)
-                  , "text" .= promptText
-                  ]
-              ]
-            ]
-          , "maxTokens" .= (100 :: Int)
-          ]
-    eRes <- sample sess params
+    -- Issue a sampling/createMessage request to the client. The conformance
+    -- suite plays the role of the LLM and always responds with
+    -- role=assistant, content={type:text, text:"…"}.
+    let params = SamplingParams
+          { messages  = [userMessage (ContentText promptText)]
+          , maxTokens = 100
+          }
+    eRes <- sample sess (toJSON params)
     case eRes of
       Left err -> pure $ toolError ("Sampling failed: " <> err)
       Right v  -> case fromJSON v of
-        A.Success (CreateMessageResp text) ->
-          pure $ toolText ("LLM response: " <> text)
+        A.Success resp ->
+          pure $ toolText ("LLM response: " <> samplingResponseText resp)
         A.Error e ->
           pure $ toolError ("Could not decode sampling response: " <> T.pack e)
 handleTool (TestElicitation msg) sess = do
-    let params = object
-          [ "message" .= msg
-          , "requestedSchema" .= object
-              [ "type" .= ("object" :: T.Text)
-              , "properties" .= object
-                  [ "username" .= object
-                      [ "type"        .= ("string" :: T.Text)
-                      , "description" .= ("User's response" :: T.Text)
-                      ]
-                  , "email" .= object
-                      [ "type"        .= ("string" :: T.Text)
-                      , "description" .= ("User's email address" :: T.Text)
-                      ]
+    let params = ElicitParams
+          { message         = msg
+          , requestedSchema = ElicitedSchema
+              { type_      = "object"
+              , properties = Map.fromList
+                  [ ("username", PropertySchema "string" "User's response")
+                  , ("email",    PropertySchema "string" "User's email address")
                   ]
-              , "required" .= ["username", "email" :: T.Text]
-              ]
-          ]
-    eRes <- elicit sess params
+              , required   = ["username", "email"]
+              }
+          }
+    eRes <- elicit sess (toJSON params)
     case eRes of
       Left err -> pure $ toolError ("Elicitation failed: " <> err)
-      Right v  -> case fromJSON v of
-        A.Success (ElicitResp action mContent) ->
-          pure $ toolText $ case (action, mContent) of
+      Right v  -> case fromJSON v :: A.Result ElicitResponse of
+        A.Success resp ->
+          pure $ toolText $ case (resp.action, resp.content) of
             ("accept", Just c) -> "User accepted: " <> T.pack (show c)
             ("decline", _)     -> "User declined the elicitation."
             ("cancel",  _)     -> "User cancelled the elicitation."
-            _                  -> "Unknown elicitation action: " <> action
+            (other, _)         -> "Unknown elicitation action: " <> other
         A.Error e ->
           pure $ toolError ("Could not decode elicitation response: " <> T.pack e)
 
--- Internal helpers for decoding sampling/elicitation responses.
+-- Sampling / elicitation wire types
+-- ---------------------------------
+-- These mirror the @sampling/createMessage@ and @elicitation/create@
+-- params and result shapes (MCP 2025-06-18). We use 'Generic' deriving so
+-- aeson handles encoding / decoding — no hand-rolled @object [...]@ trees.
+-- Field names are chosen to match the wire keys directly; trailing
+-- underscores are stripped via 'jsonDropTrailingUnderscore' so reserved
+-- words like @type@ can stay as @type_@ in Haskell.
 
-newtype CreateMessageResp = CreateMessageResp T.Text
-instance FromJSON CreateMessageResp where
-  parseJSON = withObject "CreateMessageResp" $ \o -> do
-    content <- o .: "content"
-    text    <- content .: "text"
-    pure (CreateMessageResp text)
+jsonDropTrailingUnderscore :: A.Options
+jsonDropTrailingUnderscore = A.defaultOptions
+  { A.fieldLabelModifier = dropWhileEnd (== '_') }
 
-data ElicitResp = ElicitResp T.Text (Maybe Value)
-instance FromJSON ElicitResp where
-  parseJSON = withObject "ElicitResp" $ \o -> ElicitResp
-    <$> o .: "action"
-    <*> o .:? "content"
+-- | @sampling/createMessage@ params. We reuse the library's 'PromptMessage'
+-- because the wire shape (@{role, content: ContentBlock}@) is identical.
+data SamplingParams = SamplingParams
+  { messages  :: [PromptMessage]
+  , maxTokens :: Int
+  } deriving (Show, Eq, Generic)
+
+instance ToJSON SamplingParams
+
+-- | The single content block returned by the client in a sampling response.
+-- Only the @text@ shape is used by the conformance suite.
+data SamplingResponseContent = SamplingResponseContent
+  { type_ :: T.Text
+  , text  :: T.Text
+  } deriving (Show, Eq, Generic)
+
+instance FromJSON SamplingResponseContent where
+  parseJSON = A.genericParseJSON jsonDropTrailingUnderscore
+
+-- | Whole @sampling/createMessage@ result; we only surface the inner text.
+data SamplingResponse = SamplingResponse
+  { role       :: T.Text
+  , content    :: SamplingResponseContent
+  , model      :: T.Text
+  , stopReason :: Maybe T.Text
+  } deriving (Show, Eq, Generic)
+
+instance FromJSON SamplingResponse
+
+samplingResponseText :: SamplingResponse -> T.Text
+samplingResponseText resp = resp.content.text
+
+-- | A property declaration in an elicitation @requestedSchema@.
+data PropertySchema = PropertySchema
+  { type_       :: T.Text
+  , description :: T.Text
+  } deriving (Show, Eq, Generic)
+
+instance ToJSON PropertySchema where
+  toJSON = A.genericToJSON jsonDropTrailingUnderscore
+
+-- | @requestedSchema@ for elicitation. Always object-typed in our example.
+data ElicitedSchema = ElicitedSchema
+  { type_      :: T.Text
+  , properties :: Map T.Text PropertySchema
+  , required   :: [T.Text]
+  } deriving (Show, Eq, Generic)
+
+instance ToJSON ElicitedSchema where
+  toJSON = A.genericToJSON jsonDropTrailingUnderscore
+
+-- | @elicitation/create@ params.
+data ElicitParams = ElicitParams
+  { message         :: T.Text
+  , requestedSchema :: ElicitedSchema
+  } deriving (Show, Eq, Generic)
+
+instance ToJSON ElicitParams
+
+-- | @elicitation/create@ result. @content@ is present only when
+-- @action == "accept"@; we keep it as a generic 'Value' since its shape
+-- depends on the requested schema.
+data ElicitResponse = ElicitResponse
+  { action  :: T.Text
+  , content :: Maybe Value
+  } deriving (Show, Eq, Generic)
+
+instance FromJSON ElicitResponse
 
 main :: IO ()
 main = do
@@ -296,4 +366,6 @@ main = do
                 info handlers
         ["--stdio"] -> runMcpServerStdio info handlers
         []          -> runMcpServerStdio info handlers
-        _ -> error "Usage: complete-example [--stdio | --http <port>]"
+        _ -> do
+          hPutStrLn stderr "Usage: complete-example [--stdio | --http <port>]"
+          exitFailure

@@ -135,6 +135,7 @@ executable complete-example
   build-depends:
     aeson,
     base,
+    containers,
     mcp-server,
     text,
 
