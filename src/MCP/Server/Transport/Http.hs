@@ -63,10 +63,54 @@ mcpApplication config serverInfo handlers req respond = do
   -- Log the request
   logVerbose config $ "HTTP " ++ show (Wai.requestMethod req) ++ " " ++ T.unpack (TE.decodeUtf8 $ Wai.rawPathInfo req)
 
-  -- Check if this is our MCP endpoint
-  if TE.decodeUtf8 (Wai.rawPathInfo req) == T.pack (httpEndpoint config)
-    then handleMcpRequest config serverInfo handlers req respond
-    else respond $ Wai.responseLBS status404 [("Content-Type", "text/plain")] "Not Found"
+  -- DNS rebinding protection (per spec security best practices): when the
+  -- server is bound to a loopback host, reject requests whose Host or Origin
+  -- header points elsewhere. This stops attackers from coercing local
+  -- browsers into talking to a local-only MCP server via DNS rebinding.
+  if not (isAllowedHostHeader config req) || not (isAllowedOriginHeader config req)
+    then do
+      logVerbose config "Request rejected: invalid Host/Origin for loopback bind"
+      respond $ Wai.responseLBS
+        status403
+        [("Content-Type", "application/json")]
+        (encode $ object ["error" .= ("Forbidden: invalid Host or Origin header" :: Text)])
+    -- Check if this is our MCP endpoint
+    else if TE.decodeUtf8 (Wai.rawPathInfo req) == T.pack (httpEndpoint config)
+      then handleMcpRequest config serverInfo handlers req respond
+      else respond $ Wai.responseLBS status404 [("Content-Type", "text/plain")] "Not Found"
+
+-- | Names that are always considered "loopback" regardless of configured host.
+loopbackHostNames :: [Text]
+loopbackHostNames = ["localhost", "127.0.0.1", "[::1]", "::1"]
+
+-- | Validate the Host header against the configured loopback bind. If the
+-- server is bound to 0.0.0.0 (all interfaces) we don't enforce; otherwise we
+-- require the Host's hostname portion to match the configured host or one of
+-- the standard loopback names.
+isAllowedHostHeader :: HttpConfig -> Wai.Request -> Bool
+isAllowedHostHeader config req
+  | httpHost config == "0.0.0.0" = True
+  | otherwise = case lookup "Host" (Wai.requestHeaders req) of
+      Nothing -> True   -- HTTP/1.0 client may omit Host
+      Just h  ->
+        let hostName = T.takeWhile (/= ':') (TE.decodeUtf8 h)
+        in hostName `elem` loopbackHostNames
+           || hostName == T.pack (httpHost config)
+
+-- | Validate the Origin header (if present). Same logic as Host.
+isAllowedOriginHeader :: HttpConfig -> Wai.Request -> Bool
+isAllowedOriginHeader config req
+  | httpHost config == "0.0.0.0" = True
+  | otherwise = case lookup "Origin" (Wai.requestHeaders req) of
+      Nothing -> True   -- non-browser clients omit Origin
+      Just o  ->
+        let originText = TE.decodeUtf8 o
+            -- Strip scheme then take up to first ':' or '/'
+            hostName = T.takeWhile (\c -> c /= ':' && c /= '/')
+                     $ T.dropWhile (== '/')
+                     $ snd (T.breakOnEnd "//" originText)
+        in hostName `elem` loopbackHostNames
+           || hostName == T.pack (httpHost config)
 
 -- | Handle MCP requests according to the Streamable HTTP specification.
 --
@@ -111,14 +155,12 @@ handleMcpRequest config serverInfo handlers req respond =
               status400
               [("Content-Type", "application/json")]
               (encode $ object ["error" .= ("Missing required MCP-Protocol-Version header" :: Text)])
-          Just headerValue
-            | TE.decodeUtf8 headerValue /= "2025-06-18" -> do
-                logVerbose config $ "Request rejected: Invalid protocol version: " ++ show headerValue
-                respond $ Wai.responseLBS
-                  status400
-                  [("Content-Type", "application/json")]
-                  (encode $ object ["error" .= ("Unsupported protocol version. Server only supports 2025-06-18" :: Text)])
-            | otherwise -> handleJsonRpcRequest config serverInfo handlers body respond
+          Just _ ->
+            -- Accept any negotiated version. The actual compatibility check
+            -- happens in the initialize handler, which echoes the client's
+            -- version when supported. We do not re-gate here because doing
+            -- so would require per-session state to know what was negotiated.
+            handleJsonRpcRequest config serverInfo handlers body respond
 
     -- OPTIONS for CORS preflight
     "OPTIONS" -> respond $ Wai.responseLBS
