@@ -70,6 +70,7 @@ library
     MCP.Server.Handlers
     MCP.Server.JsonRpc
     MCP.Server.Protocol
+    MCP.Server.Session
     MCP.Server.Transport.Http
     MCP.Server.Transport.Stdio
     MCP.Server.Types
@@ -89,8 +90,10 @@ library
     containers >=0.6 && <0.9,
     http-types >=0.12 && <1,
     network-uri >=2.6 && <2.8,
+    stm >=2.5 && <3,
     template-haskell >=2.16 && <2.25,
     text >=1.2 && <3,
+    time >=1.9 && <2,
     wai >=3.2 && <4,
     warp >=3.3 && <4,
 
@@ -130,6 +133,7 @@ executable complete-example
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
+    aeson,
     base,
     mcp-server,
     text,

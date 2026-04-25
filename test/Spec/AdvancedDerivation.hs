@@ -8,6 +8,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import MCP.Server
 import MCP.Server.Derive
+import MCP.Server.Session (mkStdioSession)
 import Test.Hspec
 import TestTypes
 import TestData
@@ -42,7 +43,7 @@ assertSchemaHasProperties expectedProps toolDef = do
 
 assertToolCallResult :: (ToolCallHandler IO) -> Text -> [(Text, Text)] -> Text -> IO ()
 assertToolCallResult handler toolName args expectedContent = do
-  result <- handler toolName args
+  result <- handler mkStdioSession toolName args
   case result of
     Right (ToolResult [ContentText content] False) -> content `shouldBe` expectedContent
     other -> expectationFailure $ "Expected single non-error ContentText but got: " ++ show other

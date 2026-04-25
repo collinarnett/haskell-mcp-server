@@ -8,6 +8,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import MCP.Server
 import MCP.Server.Derive
+import MCP.Server.Session (mkStdioSession)
 import Test.Hspec
 import TestTypes
 import TestData
@@ -68,7 +69,7 @@ testResourceCall handler uriString expected = do
 
 testToolCall :: ToolCallHandler IO -> Text -> [(Text, Text)] -> Text -> IO ()
 testToolCall handler name args expected = do
-  result <- handler name args
+  result <- handler mkStdioSession name args
   case result of
     Right (ToolResult [ContentText txt] False) -> txt `shouldBe` expected
     Right tr -> expectationFailure $

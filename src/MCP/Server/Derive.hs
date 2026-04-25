@@ -108,8 +108,10 @@ derivePromptHandlerWithDescription typeName handlerName descriptions = do
       -- Generate list handler
       listHandlerExp <- [| pure $(return $ ListE promptDefs) |]
 
-      -- Generate get handler with cases
-      cases <- traverse (mkDispatchCase handlerName) constructors
+      -- Generate get handler with cases. Prompts do not receive a session
+      -- argument — the conformance suite never asks prompts to emit
+      -- progress/log notifications, so the API stays the same as v0.1.
+      cases <- traverse (mkDispatchCase (plainCall handlerName)) constructors
       defaultCase <- [| pure $ Left $ InvalidPromptName $ "Unknown prompt: " <> name |]
       let defaultMatch = Match WildP (NormalB defaultCase) []
       let getHandlerExp = LamE [VarP (mkName "name"), VarP (mkName "args")] $
@@ -175,19 +177,35 @@ mkArgDef descriptions (fieldName, _, fieldType) = do
 -- Dispatch case generation (shared by prompt and tool)
 -------------------------------------------------------------------------------
 
-mkDispatchCase :: Name -> Con -> Q Clause
-mkDispatchCase handlerName con = do
+-- | A 'CallBuilder' takes a 'Q Exp' representing the constructed ADT value
+-- and returns the 'Q Exp' that calls the user handler on it. Prompts apply
+-- the handler directly; tools apply it with an extra session argument.
+type CallBuilder = Q Exp -> Q Exp
+
+-- | Apply the user handler directly. Used by prompts and resources.
+plainCall :: Name -> CallBuilder
+plainCall handlerName conQ = [| $(varE handlerName) $conQ |]
+
+-- | Apply the user handler then thread the in-scope @session@ variable as
+-- a second argument. Used by tools so handlers can call 'sendProgress'
+-- and friends. Relies on the surrounding lambda binding @session@.
+sessionCall :: Name -> CallBuilder
+sessionCall handlerName conQ =
+  [| $(varE handlerName) $conQ $(varE (mkName "session")) |]
+
+mkDispatchCase :: CallBuilder -> Con -> Q Clause
+mkDispatchCase callBuilder con = do
   let name = conName con
   let sname = snakeName name
   body <- case con of
     NormalC _ [] ->
       [| do
-          content <- $(varE handlerName) $(conE name)
+          content <- $(callBuilder (conE name))
           pure $ Right content |]
     RecC _ fields ->
-      mkRecordCase name handlerName fields
+      mkRecordCase callBuilder name fields
     NormalC _ [(_bang, paramType)] ->
-      mkSeparateParamsCase name handlerName paramType
+      mkSeparateParamsCase callBuilder name paramType
     _ -> fail "Unsupported constructor type"
   clause [litP $ stringL sname] (normalB (return body)) []
 
@@ -195,48 +213,48 @@ mkDispatchCase handlerName con = do
 -- Field validation
 -------------------------------------------------------------------------------
 
-mkSeparateParamsCase :: Name -> Name -> Type -> Q Exp
-mkSeparateParamsCase outerConName handlerName paramType = do
+mkSeparateParamsCase :: CallBuilder -> Name -> Type -> Q Exp
+mkSeparateParamsCase callBuilder outerConName paramType = do
   fields <- extractFieldsFromParamType paramType
   let argMapName = mkName "argMap"
   let mkBaseExp fieldVars = do
         paramConstructorApp <- buildParameterConstructor paramType fieldVars
         let outerConstructorApp = AppE (ConE outerConName) paramConstructorApp
         [| do
-            content <- $(varE handlerName) $(return outerConstructorApp)
+            content <- $(callBuilder (return outerConstructorApp))
             pure $ Right content |]
-  inner <- buildFieldValidation argMapName handlerName mkBaseExp fields 0
+  inner <- buildFieldValidation argMapName mkBaseExp fields 0
   [| let $(varP argMapName) = Map.fromList args in $(return inner) |]
 
-mkRecordCase :: Name -> Name -> [(Name, Bang, Type)] -> Q Exp
-mkRecordCase recConName handlerName fields = do
+mkRecordCase :: CallBuilder -> Name -> [(Name, Bang, Type)] -> Q Exp
+mkRecordCase callBuilder recConName fields = do
   case fields of
     [] -> [| do
-        content <- $(varE handlerName) $(conE recConName)
+        content <- $(callBuilder (conE recConName))
         pure $ Right content |]
     _ -> do
       let argMapName = mkName "argMap"
       let mkBaseExp fieldVars = do
             let constructorApp = foldl AppE (ConE recConName) (map VarE fieldVars)
             [| do
-                content <- $(varE handlerName) $(return constructorApp)
+                content <- $(callBuilder (return constructorApp))
                 pure $ Right content |]
-      inner <- buildFieldValidation argMapName handlerName mkBaseExp fields 0
+      inner <- buildFieldValidation argMapName mkBaseExp fields 0
       [| let $(varP argMapName) = Map.fromList args in $(return inner) |]
 
 -- Build nested case expressions for field validation, supporting any number of fields.
 -- The mkBaseExp callback receives field variable names and builds the final expression.
-buildFieldValidation :: Name -> Name -> ([Name] -> Q Exp) -> [(Name, Bang, Type)] -> Int -> Q Exp
-buildFieldValidation _argMap _handlerName mkBaseExp [] depth = do
+buildFieldValidation :: Name -> ([Name] -> Q Exp) -> [(Name, Bang, Type)] -> Int -> Q Exp
+buildFieldValidation _argMap mkBaseExp [] depth = do
   let fieldVars = [mkName ("field" ++ show i) | i <- [0..depth-1]]
   mkBaseExp fieldVars
 
-buildFieldValidation argMap handlerName mkBaseExp ((fieldName, _, fieldType):remainingFields) depth = do
+buildFieldValidation argMap mkBaseExp ((fieldName, _, fieldType):remainingFields) depth = do
   let fieldStr = nameBase fieldName
   let (isOptional, innerType) = unwrapMaybe fieldType
   let fieldVar = mkName ("field" ++ show depth)
 
-  continuation <- buildFieldValidation argMap handlerName mkBaseExp remainingFields (depth + 1)
+  continuation <- buildFieldValidation argMap mkBaseExp remainingFields (depth + 1)
 
   let parseFunc = mkParseFunc innerType
 
@@ -385,13 +403,17 @@ deriveToolHandlerWithDescription typeName handlerName descriptions = do
 
       listHandlerExp <- [| pure $(return $ ListE toolDefs) |]
 
-      -- Generate call handler with cases
-      cases <- traverse (mkDispatchCase handlerName) constructors
+      -- Generate call handler with cases. Tools receive an in-scope
+      -- 'McpSession' as the first argument; the user-supplied handler is
+      -- expected to accept it as a second positional parameter alongside
+      -- the constructed ADT value.
+      cases <- traverse (mkDispatchCase (sessionCall handlerName)) constructors
       defaultCase <- [| pure $ Left $ UnknownTool $ "Unknown tool: " <> name |]
       let defaultMatch = Match WildP (NormalB defaultCase) []
-      let callHandlerExp = LamE [VarP (mkName "name"), VarP (mkName "args")] $
-            CaseE (AppE (VarE 'T.unpack) (VarE (mkName "name")))
-              (map clauseToMatch cases ++ [defaultMatch])
+      let callHandlerExp =
+            LamE [VarP (mkName "session"), VarP (mkName "name"), VarP (mkName "args")] $
+              CaseE (AppE (VarE 'T.unpack) (VarE (mkName "name")))
+                (map clauseToMatch cases ++ [defaultMatch])
 
       return $ TupE [Just listHandlerExp, Just callHandlerExp]
     _ -> fail $ "deriveToolHandlerWithDescription: " ++ show typeName ++ " is not a data type"

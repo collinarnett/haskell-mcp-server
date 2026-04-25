@@ -18,6 +18,7 @@ import           System.IO              (hFlush, hIsEOF, hSetEncoding, stderr,
 
 import           MCP.Server.Handlers
 import           MCP.Server.JsonRpc
+import           MCP.Server.Session (mkStdioSession)
 import           MCP.Server.Types
 
 transportRunStdio :: (MonadIO m) => McpServerInfo -> McpServerHandlers m -> m ()
@@ -40,7 +41,10 @@ transportRunStdio serverInfo handlers = do
                 Left err -> liftIO $ TIO.hPutStrLn stderr $ "JSON-RPC parse error: " <> T.pack err
                 Right message -> do
                   liftIO $ TIO.hPutStrLn stderr $ "Processing message: " <> T.pack (show (getMessageSummary message))
-                  response <- handleMcpMessage serverInfo handlers message
+                  -- Stdio uses a single no-op session: progress/log are
+                  -- discarded and sample/elicit error out cleanly.
+                  let mkSession _ = mkStdioSession
+                  response <- handleMcpMessage serverInfo handlers mkSession message
                   case response of
                     Just responseMsg -> do
                       liftIO $ TIO.hPutStrLn stderr $ "Sending response for: " <> T.pack (show (getMessageSummary message))

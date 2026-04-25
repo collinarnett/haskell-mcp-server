@@ -35,4 +35,6 @@ data MyTool
     | TestEmbeddedResource
     | TestMultipleContentTypes
     | TestErrorHandling
+    | TestToolWithProgress
+    | TestToolWithLogging
     deriving (Show, Eq)

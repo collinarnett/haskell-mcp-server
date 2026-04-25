@@ -3,6 +3,8 @@
 
 module Main where
 
+import           Control.Concurrent (threadDelay)
+import           Data.Aeson         (toJSON)
 import qualified Data.Text          as T
 import           MCP.Server
 import           MCP.Server.Derive
@@ -135,34 +137,34 @@ conformanceResourceTemplates = pure
 tinyWavBase64 :: T.Text
 tinyWavBase64 = "UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAAAA"
 
-handleTool :: MyTool -> IO ToolResult
-handleTool (SearchForProduct q category) =
+handleTool :: MyTool -> McpSession IO -> IO ToolResult
+handleTool (SearchForProduct q category) _ =
     pure $ toolText $ case category of
         Nothing  -> "Search results for '" <> q <> "': Found 15 products across all categories"
         Just cat -> "Search results for '" <> q <> "' in " <> cat <> ": Found 8 products"
-handleTool (AddToCart sku) =
+handleTool (AddToCart sku) _ =
     pure $ toolText $ "Added item " <> sku <> " to your cart. Cart total: 3 items"
-handleTool Checkout =
+handleTool Checkout _ =
     pure $ toolText "Checkout completed! Order #12345 confirmed. Thank you for shopping with us!"
-handleTool (ComplexTool field1 field2 field3 field4 field5) =
+handleTool (ComplexTool field1 field2 field3 field4 field5) _ =
     pure $ toolText $
         "Complex tool called with: " <> field1 <> ", " <> field2 <>
         maybe "" (", " <>) field3 <> ", " <> field4 <>
         maybe "" (", " <>) field5
-handleTool TestSimpleText =
+handleTool TestSimpleText _ =
     pure $ toolText "This is a simple text response for testing."
-handleTool TestImageContent =
+handleTool TestImageContent _ =
     pure $ toolContent [ContentImage (ContentImageData tinyPngBase64 "image/png")]
-handleTool TestAudioContent =
+handleTool TestAudioContent _ =
     pure $ toolContent [ContentAudio (ContentAudioData tinyWavBase64 "audio/wav")]
-handleTool TestEmbeddedResource = do
+handleTool TestEmbeddedResource _ = do
     let uri = case parseURI "test://embedded-resource" of
           Just u  -> u
           Nothing -> error "invariant: test://embedded-resource is a valid URI"
     pure $ toolContent
       [ ContentEmbeddedResource $ ResourceText uri "text/plain" "This is an embedded resource content."
       ]
-handleTool TestMultipleContentTypes = do
+handleTool TestMultipleContentTypes _ = do
     let uri = case parseURI "test://mixed-content-resource" of
           Just u  -> u
           Nothing -> error "invariant: test://mixed-content-resource is a valid URI"
@@ -171,8 +173,24 @@ handleTool TestMultipleContentTypes = do
       , ContentImage (ContentImageData tinyPngBase64 "image/png")
       , ContentEmbeddedResource $ ResourceText uri "application/json" "{\"test\":\"data\",\"value\":123}"
       ]
-handleTool TestErrorHandling =
+handleTool TestErrorHandling _ =
     pure $ toolError "This tool intentionally returns an error for testing"
+handleTool TestToolWithProgress sess = do
+    -- Spec: each notification carries the same @progressToken@ as the
+    -- inbound request — sendProgress no-ops when the request had none.
+    sendProgress sess 0   (Just 100) Nothing
+    threadDelay 5_000
+    sendProgress sess 50  (Just 100) Nothing
+    threadDelay 5_000
+    sendProgress sess 100 (Just 100) Nothing
+    pure $ toolText "Progress test complete."
+handleTool TestToolWithLogging sess = do
+    sendLog sess LogInfo Nothing (toJSON ("Tool execution started" :: T.Text))
+    threadDelay 5_000
+    sendLog sess LogInfo Nothing (toJSON ("Tool processing data"   :: T.Text))
+    threadDelay 5_000
+    sendLog sess LogInfo Nothing (toJSON ("Tool execution completed":: T.Text))
+    pure $ toolText "Logging test complete."
 
 main :: IO ()
 main = do

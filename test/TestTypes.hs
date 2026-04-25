@@ -4,8 +4,9 @@ module TestTypes where
 
 import           Data.Text  (Text)
 import qualified Data.Text  as T
-import           MCP.Server (Content(..), PromptMessage, ResourceContent(..),
-                             ToolResult, toolText, userMessage)
+import           MCP.Server (Content(..), McpSession, PromptMessage,
+                             ResourceContent(..), ToolResult, toolText,
+                             userMessage)
 import           Network.URI (URI)
 
 -- Test data types for end-to-end testing
@@ -64,33 +65,33 @@ handleTestResource uri DatabaseConnection =
 handleTestResource uri UserProfile =
     pure $ ResourceText uri "text/plain" "User profile for ID 123"
 
-handleTestTool :: TestTool -> IO ToolResult
-handleTestTool (Echo text) =
+handleTestTool :: TestTool -> McpSession IO -> IO ToolResult
+handleTestTool (Echo text) _ =
     pure $ toolText $ "Echo: " <> text
-handleTestTool (Calculate op x y) =
+handleTestTool (Calculate op x y) _ =
     let result = case op of
             "add" -> x + y
             "multiply" -> x * y
             "subtract" -> x - y
             _ -> 0
     in pure $ toolText $ T.pack (show result)
-handleTestTool (Toggle flag) =
+handleTestTool (Toggle flag) _ =
     pure $ toolText $ "Flag is now: " <> T.pack (show (not flag))
-handleTestTool (Search query limit caseSens) =
+handleTestTool (Search query limit caseSens) _ =
     pure $ toolText $ "Search results for '" <> query <> "'" <>
         maybe "" ((" (limit=" <>) . (<> ")") . T.pack . show) limit <>
         maybe "" ((" (case-sensitive=" <>) . (<> ")") . T.pack . show) caseSens
 
 -- Handler for separate params tool
-handleSeparateParamsTool :: SeparateParamsTool -> IO ToolResult
-handleSeparateParamsTool (GetValue (GetValueParams key)) =
+handleSeparateParamsTool :: SeparateParamsTool -> McpSession IO -> IO ToolResult
+handleSeparateParamsTool (GetValue (GetValueParams key)) _ =
     pure $ toolText $ "Getting value for key: " <> key
-handleSeparateParamsTool (SetValue (SetValueParams key value)) =
+handleSeparateParamsTool (SetValue (SetValueParams key value)) _ =
     pure $ toolText $ "Setting " <> key <> " = " <> value
 
 -- Handler for recursive tool
-handleRecursiveTool :: RecursiveTool -> IO ToolResult
-handleRecursiveTool (ProcessData (MiddleParams (InnerParams name age))) =
+handleRecursiveTool :: RecursiveTool -> McpSession IO -> IO ToolResult
+handleRecursiveTool (ProcessData (MiddleParams (InnerParams name age))) _ =
     pure $ toolText $ "Processing data for " <> name <> " (age " <> T.pack (show age) <> ")"
 
 -- Type covering all parseable field types for exhaustive parsing tests
@@ -113,8 +114,8 @@ data AllTypesTool
         }
     deriving (Show, Eq)
 
-handleAllTypesTool :: AllTypesTool -> IO ToolResult
-handleAllTypesTool (RequiredFields t i ig d f b) =
+handleAllTypesTool :: AllTypesTool -> McpSession IO -> IO ToolResult
+handleAllTypesTool (RequiredFields t i ig d f b) _ =
     pure $ toolText $ T.intercalate ", "
         [ "text=" <> t
         , "int=" <> T.pack (show i)
@@ -123,7 +124,7 @@ handleAllTypesTool (RequiredFields t i ig d f b) =
         , "float=" <> T.pack (show f)
         , "bool=" <> T.pack (show b)
         ]
-handleAllTypesTool (OptionalFields t i ig d f b) =
+handleAllTypesTool (OptionalFields t i ig d f b) _ =
     pure $ toolText $ T.intercalate ", "
         [ "text=" <> maybe "Nothing" id t
         , "int=" <> maybe "Nothing" (T.pack . show) i

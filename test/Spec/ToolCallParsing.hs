@@ -7,6 +7,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import MCP.Server
 import MCP.Server.Derive
+import MCP.Server.Session (mkStdioSession)
 import Test.Hspec
 import TestTypes
 
@@ -14,7 +15,7 @@ allTypesHandlers :: (ToolListHandler IO, ToolCallHandler IO)
 allTypesHandlers = $(deriveToolHandler ''AllTypesTool 'handleAllTypesTool)
 
 callTool :: Text -> [(Text, Text)] -> IO (Either Error ToolResult)
-callTool = snd allTypesHandlers
+callTool = snd allTypesHandlers mkStdioSession
 
 shouldBeRight :: IO (Either Error ToolResult) -> Text -> IO ()
 shouldBeRight action expected = do

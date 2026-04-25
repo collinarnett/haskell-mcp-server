@@ -8,6 +8,7 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Text            as T
 import qualified Data.Text.Encoding   as TE
 import           MCP.Server.Protocol
+import           MCP.Server.Session   (mkStdioSession)
 import           MCP.Server.Types
 import           System.IO            (hSetEncoding, stderr, stdout, utf8)
 import           Test.Hspec
@@ -131,14 +132,14 @@ spec = describe "Unicode Handling" $ do
         _ -> expectationFailure "Expected successful prompt message with Unicode"
 
     it "tests Unicode content through manual tool handler" $ do
-      let toolHandler :: ToolName -> [(ArgumentName, ArgumentValue)] -> IO (Either Error ToolResult)
-          toolHandler "calculate" args = do
+      let toolHandler :: ToolCallHandler IO
+          toolHandler _sess "calculate" args = do
             case lookup "expression" args of
               Just expr -> return $ Right $ toolText $ "Calculation: " <> expr <> " = √result"
               Nothing -> return $ Left $ MissingRequiredParams "expression"
-          toolHandler name _ = return $ Left $ UnknownTool name
+          toolHandler _sess name _ = return $ Left $ UnknownTool name
 
-      result <- toolHandler "calculate" [("expression", "∫₀^∞ e^(-x²) dx")]
+      result <- toolHandler mkStdioSession "calculate" [("expression", "∫₀^∞ e^(-x²) dx")]
       case result of
         Right (ToolResult [ContentText txt] False) -> do
           txt `shouldSatisfy` T.isInfixOf "√"
@@ -209,7 +210,7 @@ spec = describe "Unicode Handling" $ do
               }
             ]
 
-      let toolCallHandler name args = case name of
+      let toolCallHandler _sess name args = case name of
             "calculate" -> case lookup "expression" args of
               Just expr -> return $ Right $ toolText $ "Result: " <> expr <> " → √answer"
               Nothing -> return $ Left $ MissingRequiredParams "expression"
@@ -247,7 +248,7 @@ spec = describe "Unicode Handling" $ do
         Right (ResourceText _ _ txt) -> txt `shouldSatisfy` T.isInfixOf "∀∃∈∉"
         _ -> expectationFailure "Expected successful resource result"
 
-      toolResult <- snd (case tools handlers of Just h -> h; Nothing -> error "No tools") "calculate" [("expression", "∫₀^∞ e^(-x²) dx = √π/2")]
+      toolResult <- snd (case tools handlers of Just h -> h; Nothing -> error "No tools") mkStdioSession "calculate" [("expression", "∫₀^∞ e^(-x²) dx = √π/2")]
       case toolResult of
         Right (ToolResult [ContentText txt] False) -> do
           txt `shouldSatisfy` T.isInfixOf "√"

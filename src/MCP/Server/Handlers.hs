@@ -21,6 +21,9 @@ module MCP.Server.Handlers
   , handleLoggingSetLevel
   , handleCompletionComplete
 
+    -- * Session plumbing
+  , SessionBuilder
+
     -- * Protocol Support
   , validateProtocolVersion
   , getMessageSummary
@@ -73,13 +76,21 @@ validateProtocolVersion clientVersion
   | clientVersion >= protocolVersion = Right clientVersion
   | otherwise = Right protocolVersion
 
+-- | Build the session used to dispatch a single inbound request. The HTTP
+-- transport picks the per-session base from its session map and tweaks the
+-- progress token; the stdio transport ignores the argument and returns its
+-- no-op session. Keeping this as a callback avoids leaking transport types
+-- (TQueue/IORef) into the Handlers module.
+type SessionBuilder m = Maybe Value -> McpSession m
+
 -- | Handle an MCP message and return a response if needed
 handleMcpMessage :: (MonadIO m)
                  => McpServerInfo
                  -> McpServerHandlers m
+                 -> SessionBuilder m
                  -> JsonRpcMessage
                  -> m (Maybe JsonRpcMessage)
-handleMcpMessage serverInfo handlers (JsonRpcMessageRequest req) = do
+handleMcpMessage serverInfo handlers mkSession (JsonRpcMessageRequest req) = do
   response <- case requestMethod req of
     "initialize" -> handleInitialize serverInfo handlers req
     "ping" -> handlePing req
@@ -91,7 +102,7 @@ handleMcpMessage serverInfo handlers (JsonRpcMessageRequest req) = do
     "resources/subscribe"   -> handleResourcesSubscribe req
     "resources/unsubscribe" -> handleResourcesUnsubscribe req
     "tools/list" -> handleToolsList handlers req
-    "tools/call" -> handleToolsCall handlers req
+    "tools/call" -> handleToolsCall handlers mkSession req
     "logging/setLevel"   -> handleLoggingSetLevel req
     "completion/complete" -> handleCompletionComplete handlers req
     method -> return $ makeErrorResponse (requestId req) $ JsonRpcError
@@ -101,7 +112,7 @@ handleMcpMessage serverInfo handlers (JsonRpcMessageRequest req) = do
       }
   return $ Just $ JsonRpcMessageResponse response
 
-handleMcpMessage _ _ (JsonRpcMessageNotification notif) = do
+handleMcpMessage _ _ _ (JsonRpcMessageNotification notif) = do
   case notificationMethod notif of
     "notifications/initialized" -> do
       liftIO $ hPutStrLn stderr "Received initialized notification - server is ready for operation"
@@ -111,7 +122,7 @@ handleMcpMessage _ _ (JsonRpcMessageNotification notif) = do
       return ()
   return Nothing
 
-handleMcpMessage _ _ (JsonRpcMessageResponse _) =
+handleMcpMessage _ _ _ (JsonRpcMessageResponse _) =
   return Nothing
 
 -- | Handle initialize request
@@ -317,9 +328,11 @@ handleToolsList handlers req =
             }
       return $ makeSuccessResponse (requestId req) (toJSON response)
 
--- | Handle tools/call request
-handleToolsCall :: (MonadIO m) => McpServerHandlers m -> JsonRpcRequest -> m JsonRpcResponse
-handleToolsCall handlers req =
+-- | Handle tools/call request. The session-builder is invoked with the
+-- request's @_meta.progressToken@ so the user-supplied tool handler sees a
+-- session that emits progress notifications keyed to the right token.
+handleToolsCall :: (MonadIO m) => McpServerHandlers m -> SessionBuilder m -> JsonRpcRequest -> m JsonRpcResponse
+handleToolsCall handlers mkSession req =
   case tools handlers of
     Nothing -> return $ makeErrorResponse (requestId req) $ JsonRpcError
       { errorCode = -32601
@@ -341,8 +354,9 @@ handleToolsCall handlers req =
               , errorData = Nothing
               }
             Success callReq -> do
-              let args = maybe [] (map (\(k, v) -> (k, jsonValueToText v)) . Map.toList) (toolsCallArguments callReq)
-              result <- callHandler (toolsCallName callReq) args
+              let args    = maybe [] (map (\(k, v) -> (k, jsonValueToText v)) . Map.toList) (toolsCallArguments callReq)
+                  session = mkSession (toolsCallProgressToken callReq)
+              result <- callHandler session (toolsCallName callReq) args
               case result of
                 Left err -> return $ makeErrorResponse (requestId req) $ JsonRpcError
                   { errorCode = errorCodeFromMcpError err

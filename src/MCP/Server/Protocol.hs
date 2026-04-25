@@ -48,9 +48,10 @@ module MCP.Server.Protocol
   ) where
 
 import           Data.Aeson
-import           Data.Map         (Map)
-import           Data.Text        (Text)
-import           GHC.Generics     (Generic)
+import qualified Data.Aeson.KeyMap as AKM
+import           Data.Map          (Map)
+import           Data.Text         (Text)
+import           GHC.Generics      (Generic)
 import           MCP.Server.Types
 
 protocolVersion :: Text
@@ -228,16 +229,26 @@ instance ToJSON ToolsListResponse where
     [ "tools" .= toolsListTools resp
     ]
 
--- | Tools call request
+-- | Tools call request. The optional @_meta.progressToken@ is reified into
+-- 'toolsCallProgressToken' so the dispatch layer can wire it through to
+-- the tool handler's 'McpSession' without poking at raw JSON.
 data ToolsCallRequest = ToolsCallRequest
-  { toolsCallName      :: Text
-  , toolsCallArguments :: Maybe (Map Text Value)
+  { toolsCallName          :: Text
+  , toolsCallArguments     :: Maybe (Map Text Value)
+  , toolsCallProgressToken :: Maybe Value
   } deriving (Show, Eq, Generic)
 
 instance FromJSON ToolsCallRequest where
-  parseJSON = withObject "ToolsCallRequest" $ \o -> ToolsCallRequest
-    <$> o .: "name"
-    <*> o .:? "arguments"
+  parseJSON = withObject "ToolsCallRequest" $ \o -> do
+    name      <- o .: "name"
+    arguments <- o .:? "arguments"
+    metaObj   <- o .:? "_meta"
+    let progressToken = case metaObj of
+          Just (Object km) -> case AKM.lookup "progressToken" km of
+            Just v -> Just v
+            _      -> Nothing
+          _ -> Nothing
+    pure $ ToolsCallRequest name arguments progressToken
 
 -- | Tools call response (2025-06-18 enhanced)
 data ToolsCallResponse = ToolsCallResponse

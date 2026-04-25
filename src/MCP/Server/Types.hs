@@ -21,6 +21,9 @@ module MCP.Server.Types
   , toolContent
   , toolError
 
+    -- * Sessions
+  , McpSession(..)
+
     -- * Logging
   , LogLevel(..)
   , logLevelText
@@ -577,7 +580,39 @@ type ResourceReadHandler m = URI -> m (Either Error ResourceContent)
 type ResourceTemplateListHandler m = m [ResourceTemplateDefinition]
 
 type ToolListHandler m = m [ToolDefinition]
-type ToolCallHandler m = ToolName -> [(ArgumentName, ArgumentValue)] -> m (Either Error ToolResult)
+
+-- | A tool-call handler receives the live session handle as its first
+-- argument so that tools can emit progress and log notifications, and
+-- (post-Group-7) issue sampling and elicitation requests back to the
+-- client. The 'McpSession' record lives in this module — its IO-side
+-- implementations live in "MCP.Server.Session".
+type ToolCallHandler m =
+     McpSession m
+  -> ToolName
+  -> [(ArgumentName, ArgumentValue)]
+  -> m (Either Error ToolResult)
+
+-- | Handle exposed to user-written handlers for talking back to the client
+-- mid-request. Construct one with @MCP.Server.Session.mkHttpSession@ or
+-- @MCP.Server.Session.mkStdioSession@.
+data McpSession m = McpSession
+  { sendProgress         :: Double -> Maybe Double -> Maybe Text -> m ()
+    -- ^ Emit @notifications/progress@. No-op when the request didn't
+    -- carry a @_meta.progressToken@.
+  , sendLog              :: LogLevel -> Maybe Text -> Value -> m ()
+    -- ^ Emit @notifications/message@ if the level is at or above the
+    -- session's current threshold (set by @logging/setLevel@).
+  , sample               :: Value -> m (Either Text Value)
+    -- ^ Issue a @sampling/createMessage@ request to the client.
+    -- Implementation lands in Group 7.
+  , elicit               :: Value -> m (Either Text Value)
+    -- ^ Issue an @elicitation/create@ request to the client.
+    -- Implementation lands in Group 7.
+  , currentProgressToken :: Maybe Value
+    -- ^ The raw progress-token Value the inbound request carried, if any.
+    -- Stored as 'Value' to keep this module free of transport types; the
+    -- 'Session' module reifies it back into a 'ProgressToken'.
+  }
 
 -- | Server handlers — every family is optional. The @resources@ pair handles
 -- @resources/list@ and @resources/read@; @resourceTemplates@ stands alone
