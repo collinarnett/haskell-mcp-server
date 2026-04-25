@@ -14,13 +14,18 @@ module MCP.Server.Session
   , mkHttpSession
   , mkStdioSession
 
+    -- * Routing incoming server-request responses
+  , routeIncomingResponse
+
     -- * Progress tokens
   , ProgressToken(..)
   , progressTokenFromValue
   , progressTokenToValue
   ) where
 
-import           Control.Concurrent.MVar     (MVar)
+import           Control.Concurrent          (forkIO, threadDelay)
+import           Control.Concurrent.MVar     (MVar, newEmptyMVar, putMVar,
+                                              takeMVar, tryPutMVar)
 import           Control.Concurrent.STM      (TQueue, atomically, newTQueueIO,
                                               writeTQueue)
 import           Control.Monad.IO.Class      (MonadIO, liftIO)
@@ -69,9 +74,11 @@ data SessionState = SessionState
     -- ^ URIs the client called @resources/subscribe@ on.
   , sessionOutbound     :: TQueue JsonRpcMessage
     -- ^ Server-to-client messages awaiting delivery on the SSE GET stream.
-  , sessionPendingReqs  :: IORef (Map RequestId (MVar (Either JsonRpcError Value)))
+  , sessionPendingReqs  :: IORef (Map RequestId (MVar (Either Text Value)))
     -- ^ Server-initiated requests (sampling, elicitation) waiting for a
     -- client-supplied response. Keyed by the request id we generated.
+    -- 'Right' carries the @result@ Value; 'Left' carries a server-side
+    -- error description (transport disconnect, decode failure, etc.).
   , sessionRequestIdGen :: IORef Int
     -- ^ Monotonic counter for generating fresh server request ids.
   }
@@ -134,10 +141,56 @@ mkHttpSession st mProg = McpSession
             , "data"  A..= d
             ] ++ maybe [] (\l -> ["logger" A..= l]) mLogger
         else pure ()
-  , sample = \_ -> pure (Left "sampling not yet implemented")
-  , elicit = \_ -> pure (Left "elicitation not yet implemented")
+  , sample = serverInitiatedRequest st "sampling/createMessage"
+  , elicit = serverInitiatedRequest st "elicitation/create"
   , currentProgressToken = fmap progressTokenToValue mProg
   }
+
+-- | Issue a server-initiated request to the client and block until the
+-- client posts back a matching JSON-RPC response. Times out after 60s
+-- so a misbehaving (or disconnected) client can't pin a tool handler
+-- forever.
+serverInitiatedRequest :: SessionState -> Text -> Value -> IO (Either Text Value)
+serverInitiatedRequest st method params = do
+  reqId <- freshRequestId st
+  reply <- newEmptyMVar
+  atomicModifyIORef' (sessionPendingReqs st)
+    (\m -> (Map.insert reqId reply m, ()))
+  let req = JsonRpcRequest
+        { requestJsonrpc = "2.0"
+        , requestId      = reqId
+        , requestMethod  = method
+        , requestParams  = Just params
+        }
+  atomically $ writeTQueue (sessionOutbound st) (JsonRpcMessageRequest req)
+  -- Watchdog: if the client never responds, signal a Left.
+  _ <- forkIO $ do
+    threadDelay 60_000_000   -- 60 seconds
+    _ <- tryPutMVar reply (Left "timed out waiting for client response")
+    pure ()
+  result <- takeMVar reply
+  -- Best-effort cleanup of the pending entry; safe even if already gone.
+  atomicModifyIORef' (sessionPendingReqs st)
+    (\m -> (Map.delete reqId m, ()))
+  pure result
+
+-- | Hand a freshly-decoded JSON-RPC response back to whichever in-flight
+-- server-initiated request is waiting for it. The HTTP transport calls
+-- this when a client POST contains a response body. If the id is unknown
+-- (already timed out, never issued, etc.) the message is dropped.
+routeIncomingResponse :: SessionState -> JsonRpcResponse -> IO ()
+routeIncomingResponse st resp = do
+  m <- readIORef (sessionPendingReqs st)
+  case Map.lookup (responseId resp) m of
+    Nothing  -> pure ()
+    Just mv -> do
+      let payload = case responseError resp of
+            Just err -> Left (errorMessage err)
+            Nothing  -> case responseResult resp of
+              Just v  -> Right v
+              Nothing -> Left "client response had neither result nor error"
+      _ <- tryPutMVar mv payload
+      pure ()
 
 -- | A session that is safe to construct on the stdio transport but does
 -- nothing with notifications and refuses sampling/elicitation. The conformance

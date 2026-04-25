@@ -389,6 +389,12 @@ handlePostBody config serverInfo handlers sessions req body respond = do
       Right message -> do
         logVerbose config $ "Processing HTTP message: " ++ show (getMessageSummary message)
         case message of
+          -- A response from the client (the answer to a server-initiated
+          -- sampling or elicitation request). Hand it to the session's
+          -- pending-request router and ack with 202.
+          JsonRpcMessageResponse r -> do
+            routeIncomingResponse st r
+            respond $ Wai.responseLBS status202 corsHeaders ""
           -- Tool calls may emit notifications mid-flight. Stream the response
           -- via SSE so notifications and the final result share one stream.
           JsonRpcMessageRequest r | requestMethod r == "tools/call" ->

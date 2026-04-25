@@ -4,7 +4,9 @@
 module Main where
 
 import           Control.Concurrent (threadDelay)
-import           Data.Aeson         (toJSON)
+import           Data.Aeson         (FromJSON (..), Value, fromJSON, object,
+                                     toJSON, withObject, (.:), (.:?), (.=))
+import qualified Data.Aeson         as A
 import qualified Data.Text          as T
 import           MCP.Server
 import           MCP.Server.Derive
@@ -191,6 +193,74 @@ handleTool TestToolWithLogging sess = do
     threadDelay 5_000
     sendLog sess LogInfo Nothing (toJSON ("Tool execution completed":: T.Text))
     pure $ toolText "Logging test complete."
+handleTool (TestSampling promptText) sess = do
+    -- Issue a sampling/createMessage request to the client and surface the
+    -- text it returns. The conformance suite plays the role of the LLM and
+    -- always responds with role=assistant, content.text="...".
+    let params = object
+          [ "messages" .= [ object
+              [ "role"    .= ("user" :: T.Text)
+              , "content" .= object
+                  [ "type" .= ("text" :: T.Text)
+                  , "text" .= promptText
+                  ]
+              ]
+            ]
+          , "maxTokens" .= (100 :: Int)
+          ]
+    eRes <- sample sess params
+    case eRes of
+      Left err -> pure $ toolError ("Sampling failed: " <> err)
+      Right v  -> case fromJSON v of
+        A.Success (CreateMessageResp text) ->
+          pure $ toolText ("LLM response: " <> text)
+        A.Error e ->
+          pure $ toolError ("Could not decode sampling response: " <> T.pack e)
+handleTool (TestElicitation msg) sess = do
+    let params = object
+          [ "message" .= msg
+          , "requestedSchema" .= object
+              [ "type" .= ("object" :: T.Text)
+              , "properties" .= object
+                  [ "username" .= object
+                      [ "type"        .= ("string" :: T.Text)
+                      , "description" .= ("User's response" :: T.Text)
+                      ]
+                  , "email" .= object
+                      [ "type"        .= ("string" :: T.Text)
+                      , "description" .= ("User's email address" :: T.Text)
+                      ]
+                  ]
+              , "required" .= ["username", "email" :: T.Text]
+              ]
+          ]
+    eRes <- elicit sess params
+    case eRes of
+      Left err -> pure $ toolError ("Elicitation failed: " <> err)
+      Right v  -> case fromJSON v of
+        A.Success (ElicitResp action mContent) ->
+          pure $ toolText $ case (action, mContent) of
+            ("accept", Just c) -> "User accepted: " <> T.pack (show c)
+            ("decline", _)     -> "User declined the elicitation."
+            ("cancel",  _)     -> "User cancelled the elicitation."
+            _                  -> "Unknown elicitation action: " <> action
+        A.Error e ->
+          pure $ toolError ("Could not decode elicitation response: " <> T.pack e)
+
+-- Internal helpers for decoding sampling/elicitation responses.
+
+newtype CreateMessageResp = CreateMessageResp T.Text
+instance FromJSON CreateMessageResp where
+  parseJSON = withObject "CreateMessageResp" $ \o -> do
+    content <- o .: "content"
+    text    <- content .: "text"
+    pure (CreateMessageResp text)
+
+data ElicitResp = ElicitResp T.Text (Maybe Value)
+instance FromJSON ElicitResp where
+  parseJSON = withObject "ElicitResp" $ \o -> ElicitResp
+    <$> o .: "action"
+    <*> o .:? "content"
 
 main :: IO ()
 main = do

@@ -37,4 +37,6 @@ data MyTool
     | TestErrorHandling
     | TestToolWithProgress
     | TestToolWithLogging
+    | TestSampling { prompt :: Text }
+    | TestElicitation { message :: Text }
     deriving (Show, Eq)

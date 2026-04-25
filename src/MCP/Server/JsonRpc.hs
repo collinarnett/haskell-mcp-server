@@ -29,7 +29,7 @@ data RequestId
   = RequestIdText Text
   | RequestIdNumber Int
   | RequestIdNull
-  deriving (Show, Eq, Generic)
+  deriving (Show, Eq, Ord, Generic)
 
 instance ToJSON RequestId where
   toJSON (RequestIdText t) = toJSON t
