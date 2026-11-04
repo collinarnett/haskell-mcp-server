@@ -1,10 +1,14 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Spec.JSONConversion (spec) where
 
-import Data.Aeson (Value (..), toJSON)
+import Data.Aeson (Value (..), decode, toJSON)
 import qualified Data.Aeson.KeyMap as KeyMap
+import qualified Data.ByteString.Lazy as LBS
+import qualified Data.Map as Map
+import qualified Data.Text.Encoding as TE
 import MCP.Server.Protocol (InitializeResponse (..))
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -28,6 +32,7 @@ spec = describe "JSON Type Conversion" $ do
     it "converts integers manually" testIntConversion
     it "converts booleans manually" testBoolConversion
 
+  structuredArgumentSpec
   initializeSpec
 
 -- Fixed property-based tests (no more 'error' usage)
@@ -85,6 +90,18 @@ testBoolConversion = do
             result -> do
                 expectationFailure $ "Expected " <> T.unpack expected <> " but got " <> T.unpack result
                 return False
+
+-- | Arrays and objects once reached handlers as Haskell's 'show' of the
+-- aeson value (@Array [String "a"]@), which no handler could decode.
+structuredArgumentSpec :: Spec
+structuredArgumentSpec = describe "Structured arguments" $ do
+  it "hands an array to the handler as JSON that decodes to it" $
+    property $ \(items :: [Text]) ->
+      decode (LBS.fromStrict (TE.encodeUtf8 (jsonValueToText (toJSON items)))) == Just items
+  it "hands an object to the handler as JSON that decodes to it" $
+    property $ \(entries :: [(Text, Int)]) ->
+      let fields = Map.fromList entries
+       in decode (LBS.fromStrict (TE.encodeUtf8 (jsonValueToText (toJSON fields)))) == Just fields
 
 -- | Clients read the server's instructions from the top level of the
 -- initialize result; nested in serverInfo they were never seen.

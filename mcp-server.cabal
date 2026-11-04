@@ -196,6 +196,7 @@ test-suite haskell-mcp-server-test
     aeson,
     base,
     bytestring,
+    containers,
     hspec,
     mcp-server,
     network-uri,

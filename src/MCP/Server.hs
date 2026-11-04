@@ -17,26 +17,10 @@ module MCP.Server
   , module MCP.Server.Types
   ) where
 
-import           Data.Aeson
-import           Data.Text              (Text)
-import qualified Data.Text              as T
-
+import           MCP.Server.Handlers    (jsonValueToText)
 import           MCP.Server.Transport.Stdio (transportRunStdio)
 import           MCP.Server.Transport.Http (HttpConfig(..), transportRunHttp, defaultHttpConfig)
 import           MCP.Server.Types
-
--- | Convert JSON Value to Text representation suitable for handlers
-jsonValueToText :: Value -> Text
-jsonValueToText (String t) = t
-jsonValueToText (Number n) =
-    -- Check if it's a whole number, if so format as integer
-    if fromInteger (round n) == n
-        then T.pack $ show (round n :: Integer)
-        else T.pack $ show n
-jsonValueToText (Bool True) = "true"
-jsonValueToText (Bool False) = "false"
-jsonValueToText Null = ""
-jsonValueToText v = T.pack $ show v
 
 -- | Run an MCP server using STDIO transport
 runMcpServerStdio :: McpServerInfo -> McpServerHandlers IO -> IO ()

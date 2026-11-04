@@ -38,13 +38,17 @@ import           Data.Aeson
 import qualified Data.Map               as Map
 import           Data.Text              (Text)
 import qualified Data.Text              as T
+import qualified Data.Text.Encoding     as TE
+import qualified Data.ByteString.Lazy   as LBS
 import           System.IO              (hPutStrLn, stderr)
 
 import           MCP.Server.JsonRpc
 import           MCP.Server.Protocol
 import           MCP.Server.Types
 
--- | Convert JSON Value to Text representation suitable for handlers
+-- | Convert JSON Value to Text representation suitable for handlers.
+-- Strings arrive as their contents; arrays and objects as their JSON
+-- encoding, which handlers decode with aeson.
 jsonValueToText :: Value -> Text
 jsonValueToText (String t) = t
 jsonValueToText (Number n) =
@@ -55,7 +59,7 @@ jsonValueToText (Number n) =
 jsonValueToText (Bool True) = "true"
 jsonValueToText (Bool False) = "false"
 jsonValueToText Null = ""
-jsonValueToText v = T.pack $ show v
+jsonValueToText v = TE.decodeUtf8 (LBS.toStrict (encode v))
 
 -- | Extract a brief summary of a JSON-RPC message for logging
 getMessageSummary :: JsonRpcMessage -> String
