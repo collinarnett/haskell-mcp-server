@@ -177,6 +177,7 @@ test-suite haskell-mcp-server-test
     Spec.JSONConversion
     Spec.ProtocolVersionNegotiation
     Spec.SchemaValidation
+    Spec.StdioTransport
     Spec.ToolCallParsing
     Spec.UnicodeHandling
     TestData
@@ -200,4 +201,5 @@ test-suite haskell-mcp-server-test
     hspec,
     mcp-server,
     network-uri,
+    process,
     text,

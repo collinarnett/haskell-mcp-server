@@ -11,6 +11,7 @@ import qualified Spec.UnicodeHandling
 import qualified Spec.ProtocolVersionNegotiation
 import qualified Spec.ToolCallParsing
 import qualified Spec.ContentEncoding
+import qualified Spec.StdioTransport
 
 main :: IO ()
 main = hspec $ do
@@ -23,3 +24,4 @@ main = hspec $ do
     Spec.ProtocolVersionNegotiation.spec
     Spec.ToolCallParsing.spec
     Spec.ContentEncoding.spec
+    Spec.StdioTransport.spec
