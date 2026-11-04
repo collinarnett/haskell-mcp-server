@@ -1,8 +1,11 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Spec.JSONConversion (spec) where
 
-import Data.Aeson (toJSON)
+import Data.Aeson (Value (..), toJSON)
+import qualified Data.Aeson.KeyMap as KeyMap
+import MCP.Server.Protocol (InitializeResponse (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import MCP.Server
@@ -24,6 +27,8 @@ spec = describe "JSON Type Conversion" $ do
   describe "Manual conversion tests" $ do
     it "converts integers manually" testIntConversion
     it "converts booleans manually" testBoolConversion
+
+  initializeSpec
 
 -- Fixed property-based tests (no more 'error' usage)
 prop_intRoundTrip :: Int -> Bool
@@ -80,3 +85,22 @@ testBoolConversion = do
             result -> do
                 expectationFailure $ "Expected " <> T.unpack expected <> " but got " <> T.unpack result
                 return False
+
+-- | Clients read the server's instructions from the top level of the
+-- initialize result; nested in serverInfo they were never seen.
+initializeSpec :: Spec
+initializeSpec = describe "Initialize response" $
+  it "carries the instructions at the top level of the result" $ do
+    let response =
+          InitializeResponse
+            { initRespProtocolVersion = "2025-06-18"
+            , initRespCapabilities = ServerCapabilities Nothing Nothing Nothing Nothing Nothing
+            , initRespServerInfo = McpServerInfo "test" "1" "Read the manual."
+            }
+    case toJSON response of
+      Object result -> do
+        KeyMap.lookup "instructions" result `shouldBe` Just (String "Read the manual.")
+        (KeyMap.lookup "serverInfo" result >>= \case
+            Object info -> KeyMap.lookup "instructions" info
+            _ -> Nothing) `shouldBe` Nothing
+      other -> expectationFailure ("not an object: " <> show other)

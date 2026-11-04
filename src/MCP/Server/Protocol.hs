@@ -85,8 +85,8 @@ instance ToJSON InitializeResponse where
     , "serverInfo" .= object
         [ "name" .= serverName (initRespServerInfo resp)
         , "version" .= serverVersion (initRespServerInfo resp)
-        , "instructions" .= serverInstructions (initRespServerInfo resp)
         ]
+    , "instructions" .= serverInstructions (initRespServerInfo resp)
     ]
 
 -- | Initialized notification (no parameters)
